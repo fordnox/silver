@@ -30,7 +30,7 @@ from django.core.exceptions import ValidationError, NON_FIELD_ERRORS
 from django.core.serializers.json import DjangoJSONEncoder
 from django.urls import reverse
 from django.core.validators import MinValueValidator
-from django.db import models
+from django.db import models, transaction
 from django.db import transaction as db_transaction
 from django.db.models import Max, ForeignKey, F
 from django.template.loader import select_template
@@ -260,8 +260,19 @@ class BillingDocumentBase(models.Model):
             self.paid_date = timezone.now().date()
 
     @transition(field=state, source=STATES.ISSUED, target=STATES.PAID)
-    def pay(self, paid_date=None):
-        self._pay(paid_date=paid_date)
+    def pay(self, paid_date=None, db="default"):
+        """
+        Call this function inside an atomic transaction for better race condition protection.
+
+        with transaction.atomic():
+            proforma.pay()
+        """
+        with transaction.atomic(using=db):
+            locked_self = self.__class__.objects.using(db).select_for_update().get()
+            if locked_self.state != BillingDocumentBase.STATES.ISSUED:
+                raise TransitionNotAllowed
+
+            self._pay(paid_date)
 
     def _cancel(self, cancel_date=None):
         if cancel_date:

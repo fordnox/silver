@@ -16,6 +16,7 @@ from __future__ import absolute_import
 
 from decimal import Decimal
 
+from django.db import transaction, OperationalError, connection
 from six.moves import zip
 
 from django.core.exceptions import ValidationError
@@ -37,6 +38,22 @@ class TestProforma(TestCase):
 
         assert proforma.related_document.state == Invoice.STATES.PAID
         assert proforma.state == Invoice.STATES.PAID
+
+    def test_pay_proforma_with_no_related_invoice_race_condition(self):
+        if connection.vendor == "sqlite":
+            self.skipTest("select_for_update is ignored when using sqlite")
+
+        proforma = ProformaFactory.create()
+        proforma.issue()
+
+        with transaction.atomic(using="default"):
+            proforma = Proforma.objects.using("default").get(id=proforma.id)
+            proforma_alternate = Proforma.objects.using("alternate").get(id=proforma.id)
+
+            proforma.pay()
+            with transaction.atomic(using="alternate"):
+                with self.assertRaises(OperationalError):
+                    proforma_alternate.pay()
 
     def test_clone_proforma_into_draft(self):
         proforma = ProformaFactory.create()

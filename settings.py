@@ -191,3 +191,4 @@ if sys.argv[0].endswith('pytest'):
     PAYMENT_DUE_DAYS = 5
     REST_FRAMEWORK['PAGE_SIZE'] = API_PAGE_SIZE = 5
     SILVER_SHOW_PDF_STORAGE_URL = True
+    DATABASES["alternate"] = DATABASES["default"]  # used for concurrency tests

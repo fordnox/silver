@@ -14,7 +14,8 @@
 
 from __future__ import absolute_import
 
-from django_fsm import transition
+from django.db import transaction
+from django_fsm import transition, TransitionNotAllowed
 
 from django.core.exceptions import ValidationError
 from django.db.models.signals import pre_delete
@@ -74,23 +75,28 @@ class Proforma(BillingDocumentBase):
     def issue(self, issue_date=None, due_date=None):
         self.archived_provider = self.provider.get_archivable_field_values()
 
-        super(Proforma, self)._issue(issue_date, due_date)
+        self._issue(issue_date, due_date)
 
     @transition(field='state', source=BillingDocumentBase.STATES.ISSUED,
                 target=BillingDocumentBase.STATES.PAID)
-    def pay(self, paid_date=None):
-        super(Proforma, self)._pay(paid_date)
+    def pay(self, paid_date=None, db="default"):
+        with transaction.atomic(using=db):
+            locked_self = Proforma.objects.using(db).select_for_update().get()
+            if locked_self.state != BillingDocumentBase.STATES.ISSUED:
+                raise TransitionNotAllowed
 
-        if not self.related_document:
-            self.related_document = self._new_invoice()
-            self.related_document.issue()
-            self.related_document.pay(paid_date=paid_date)
+            self._pay(paid_date)
 
-            # if the proforma is paid, the invoice due_date should be issue_date
-            self.related_document.due_date = self.related_document.issue_date
+            if not self.related_document and not locked_self.related_document:
+                self.related_document = self._new_invoice()
+                self.related_document.issue()
+                self.related_document.pay(paid_date=paid_date)
 
-            self.related_document.save()
-            self.save()
+                # if the proforma is paid, the invoice due_date should be issue_date
+                self.related_document.due_date = self.related_document.issue_date
+
+                self.related_document.save()
+                self.save()
 
     def create_invoice(self):
         if self.state != BillingDocumentBase.STATES.ISSUED:
